@@ -19,5 +19,5 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/yourusername/neoglyph"
-Repository = "https://github.com/yourusername/neoglyph"
+Homepage = "https://github.com/cydktx/neoglyph"
+Repository = "https://github.com/cydktx/neoglyph"
