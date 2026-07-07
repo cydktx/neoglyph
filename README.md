@@ -151,7 +151,7 @@ python -m unittest discover tests/ -v
 
 如果这个项目对你有帮助，欢迎请作者喝杯咖啡。
 
-<img src="docs/alipay_qr.jpg" alt="支付宝打赏" width="200">
+![支付宝打赏](docs/alipay_qr.png)
 
 ## 📝 License
 
