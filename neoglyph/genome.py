@@ -138,10 +138,13 @@ class VariableNode(ProgramNode):
 class OperationNode(ProgramNode):
     """操作节点 - Evolution Core 3.2增强
     
+    支持自定义算子注册。
+    
     新增：
     - 同类项合并
     - 多级表达式化简
     - 简化结果缓存
+    - 自定义算子接口
     """
     
     OPERATIONS = {
@@ -160,6 +163,35 @@ class OperationNode(ProgramNode):
     
     UNARY_OPS = ['SIN', 'COS', 'EXP', 'LOG', 'NEG']
     COMMUTATIVE_OPS = ['ADD', 'MUL']
+    
+    @staticmethod
+    def register_operator(name, fn, is_unary=False, commutative=False):
+        """注册自定义算子
+        
+        Parameters
+        ----------
+        name : str
+            算子名称（如 'ABS', 'SQRT'）
+        fn : callable
+            算子函数。二元算子接受 (a, b)，一元算子接受 (a)
+        is_unary : bool
+            是否为一元算子
+        commutative : bool
+            是否为可交换算子
+        
+        Examples
+        --------
+        >>> OperationNode.register_operator('ABS', lambda a: np.abs(a), is_unary=True)
+        >>> OperationNode.register_operator('SQUARE', lambda a: a**2, is_unary=True)
+        >>> OperationNode.register_operator('MAX', lambda a, b: np.maximum(a, b))
+        """
+        OperationNode.OPERATIONS[name] = fn
+        if is_unary:
+            if name not in OperationNode.UNARY_OPS:
+                OperationNode.UNARY_OPS.append(name)
+        if commutative:
+            if name not in OperationNode.COMMUTATIVE_OPS:
+                OperationNode.COMMUTATIVE_OPS.append(name)
     
     def __init__(self, op, left=None, right=None):
         super().__init__()

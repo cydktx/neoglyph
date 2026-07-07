@@ -21,6 +21,7 @@ from .evolution import (
     EarlyStopper,
     FitnessSharing,
     IslandModel,
+    ParetoFront,
 )
 from .evolution_advanced import (
     DiscoveryScore,
@@ -34,5 +35,12 @@ from .applications import (
     PhysicsDiscoverer,
     ParallelSymbolicRegressor,
 )
+from .visualization import (
+    plot_fit_curve,
+    plot_evolution_history,
+    plot_expression_tree,
+    plot_pareto_front,
+    print_tree,
+)
 
-__version__ = "4.0"
+__version__ = "4.1"

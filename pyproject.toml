@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "neoglyph"
-version = "4.0.0"
+version = "4.1.0"
 description = "符号回归与程序进化系统 — 让AI自己发现数学公式"
 readme = "README.md"
 license = {text = "MIT"}
@@ -14,6 +14,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+viz = [
+    "matplotlib>=3.5",
+]
 dev = [
     "matplotlib>=3.5",
 ]
@@ -21,3 +24,24 @@ dev = [
 [project.urls]
 Homepage = "https://github.com/cydktx/neoglyph"
 Repository = "https://github.com/cydktx/neoglyph"
+Documentation = "https://github.com/cydktx/neoglyph/tree/main/docs"
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["neoglyph*"]

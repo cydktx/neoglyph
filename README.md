@@ -148,14 +148,43 @@ print(tree.simplify().to_expression())  # "2 * x + 1"
 
 ---
 
+## 为什么选 NeoGlyph？
+
+与同类工具的对比：
+
+| 特性 | NeoGlyph | gplearn | AI-Feynman |
+|------|----------|---------|------------|
+| 核心算法 | 树GP + 符号简化 | 树GP | 神经网络 + 符号回归 |
+| 多变量支持 | 原生支持 | 需手动编码 | 支持 |
+| 符号简化 | 同类项合并、常数规范化 | 无 | 无 |
+| 自定义算子 | 一行注册 | 需修改源码 | 不支持 |
+| 帕累托最优 | 内置 | 无 | 无 |
+| 可解释 AI | 完整流程 | 无 | 核心功能 |
+| 可视化 | 拟合曲线/进化损失/树 | 基础 | 无 |
+| 依赖 | 仅 numpy | numpy + sklearn | PyTorch + 多个 |
+| GPU 需求 | 不需要 | 不需要 | 需要 |
+| 离线可用 | 完全离线 | 完全离线 | 依赖网络权重 |
+| 最小样本量 | 5-10 个点 | 20+ 个点 | 100+ 个点 |
+
+**NeoGlyph 适用于：**
+- 小样本场景（几十个数据点就够了）
+- 无 GPU 环境（笔记本、边缘设备）
+- 完全离线（实验室、涉密环境）
+- 需要可解释公式（科研论文、教育）
+- 快速原型验证（从数据到公式，2 秒）
+
+---
+
 ## 核心特性
 
 - **Tree Genome** — 表达式树直接映射数学公式，支持单变量和多变量
 - **符号简化器** — 自动合并同类项（`3x+2x → 5x`）、规范化常数、消除冗余
 - **统一进化引擎** — 单一 `EvolutionEngine`，支持 linear/tree 双模式，可配置策略
-- **高级进化策略** — 适应度共享（Fitness Sharing）、岛模型（Island Model）、早停、精英存档
+- **高级进化策略** — 适应度共享（Fitness Sharing）、岛模型（Island Model）、早停、帕累托最优
+- **自定义算子** — 一行代码注册新算子，如 `ABS`、`SQRT`、`MAX`
 - **完整 VM** — 自定义栈式虚拟机，20+ 指令 + 自动微分
 - **应用层** — `SymbolicRegressor`、`PhysicsDiscoverer`，统一 `fit/predict/score` 接口
+- **可视化** — 拟合曲线、进化损失曲线、表达式树、帕累托前沿
 
 ## 文档
 
@@ -177,11 +206,12 @@ NeoGlyph/
 │   ├── vm.py                 # 栈式虚拟机 + 自动微分
 │   ├── tensor.py             # 张量
 │   ├── ops.py                # VM 操作符
-│   ├── genome.py             # TreeGenome + 符号简化
+│   ├── genome.py             # TreeGenome + 符号简化 + 自定义算子
 │   ├── genome_linear.py      # 线性 Genome（向后兼容）
-│   ├── evolution.py          # 统一进化引擎 + 高级策略
+│   ├── evolution.py          # 统一进化引擎 + 高级策略 + 帕累托
 │   ├── evolution_advanced.py # 高级进化特性
 │   ├── applications.py       # 应用层
+│   ├── visualization.py      # 可视化（拟合曲线/进化损失/表达式树）
 │   └── profiler.py           # 性能分析
 ├── tests/                     # 126 个测试
 ├── examples/                  # 13 个 Demo 脚本
@@ -199,6 +229,7 @@ python -m unittest discover tests/ -v
 
 ## 版本历史
 
+- **v4.1** — 可视化模块、自定义算子接口、帕累托最优筛选、pip 打包完善
 - **v4.0** — 统一 Evolution API + Application API，FitnessSharing、IslandModel、多变量支持、evaluate_array 向量化
 - **v3.3** — 同类项合并、简化缓存、智能随机生成
 - **v3.2** — 符号简化器、可读性评分、常数规范化

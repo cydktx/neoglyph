@@ -811,3 +811,114 @@ class IslandModel:
             'best_genome': self.best_genome,
             'islands': self.islands,
         }
+
+
+# ============================================================================
+# 帕累托最优筛选
+# ============================================================================
+
+class ParetoFront:
+    """帕累托最优筛选 - 多目标优化
+    
+    同时优化两个目标：
+    1. 误差最小化（accuracy/mse）
+    2. 复杂度最小化（表达式节点数）
+    
+    输出帕累托前沿上的多个候选解，方便科研选型。
+    
+    Parameters
+    ----------
+    population : list[TreeGenome]
+        已评估的种群
+    X : array-like
+        输入数据
+    y : array-like
+        目标值
+    
+    Examples
+    --------
+    >>> pareto = ParetoFront()
+    >>> candidates = pareto.select(population, X, y)
+    >>> for c in candidates:
+    ...     print(f"{c['expression']}: MSE={c['mse']:.6f}, complexity={c['complexity']}")
+    """
+    
+    @staticmethod
+    def select(population, X, y):
+        """从种群中选择帕累托前沿个体
+        
+        Returns
+        -------
+        list[dict] : 帕累托最优解列表，每项含 expression/mse/accuracy/complexity/genome
+        """
+        pareto = []
+        
+        for genome in population:
+            try:
+                result = genome.evaluate_array(X, y)
+                mse = result['mse']
+                accuracy = result['accuracy']
+                complexity = genome.get_complexity()
+                expression = genome.to_expression()
+                
+                pareto.append({
+                    'expression': expression,
+                    'mse': mse,
+                    'accuracy': accuracy,
+                    'complexity': complexity,
+                    'genome': genome,
+                })
+            except Exception:
+                continue
+        
+        if not pareto:
+            return []
+        
+        # 帕累托筛选：按误差排序，保留不被任何其他个体支配的
+        front = []
+        for i, candidate in enumerate(pareto):
+            dominated = False
+            for j, other in enumerate(pareto):
+                if i == j:
+                    continue
+                # other 支配 candidate：other 在误差和复杂度上都更好
+                if other['mse'] <= candidate['mse'] and other['complexity'] <= candidate['complexity']:
+                    if other['mse'] < candidate['mse'] or other['complexity'] < candidate['complexity']:
+                        dominated = True
+                        break
+            if not dominated:
+                front.append(candidate)
+        
+        # 按误差排序
+        front.sort(key=lambda g: g['mse'])
+        return front
+    
+    @staticmethod
+    def best_by_complexity_budget(population, X, y, max_complexity=None):
+        """在复杂度预算内选最优
+        
+        Parameters
+        ----------
+        max_complexity : int or None
+            最大允许的复杂度。None 则不限制。
+        
+        Returns
+        -------
+        list[dict] : 在不同复杂度级别的帕累托最优解
+        """
+        front = ParetoFront.select(population, X, y)
+        if not front:
+            return []
+        
+        if max_complexity is not None:
+            front = [g for g in front if g['complexity'] <= max_complexity]
+        
+        # 按复杂度分级
+        levels = {}
+        for g in front:
+            level = g['complexity']
+            if level not in levels or g['mse'] < levels[level]['mse']:
+                levels[level] = g
+        
+        result = sorted(levels.values(), key=lambda g: g['complexity'])
+        return result

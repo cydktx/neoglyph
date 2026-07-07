@@ -328,7 +328,50 @@ c = ConstantNode(3.14159)  # π
 
 ---
 
-## VM 层
+## 自定义算子
+
+通过 `OperationNode.register_operator()` 注册自定义算子：
+
+```python
+from neoglyph import OperationNode
+
+# 注册一元算子
+OperationNode.register_operator('ABS', lambda a: np.abs(a), is_unary=True)
+OperationNode.register_operator('SQUARE', lambda a: a**2, is_unary=True)
+OperationNode.register_operator('SQRT', lambda a: np.sqrt(np.maximum(a, 0)), is_unary=True)
+
+# 注册二元算子
+OperationNode.register_operator('MAX', lambda a, b: np.maximum(a, b))
+OperationNode.register_operator('MIN', lambda a, b: np.minimum(a, b))
+
+# 使用
+node = OperationNode('ABS', VariableNode('x'))
+```
+
+---
+
+## 帕累托最优
+
+### `ParetoFront`
+
+帕累托最优筛选，同时优化误差和复杂度。
+
+```python
+from neoglyph import ParetoFront
+
+# 获取帕累托前沿
+front = ParetoFront.select(population, X, y)
+for candidate in front[:3]:
+    print(f"{candidate['expression']}: MSE={candidate['mse']:.6f}, "
+          f"complexity={candidate['complexity']}")
+
+# 按复杂度预算筛选
+candidates = ParetoFront.best_by_complexity_budget(population, X, y, max_complexity=10)
+```
+
+---
+
+## 可视化
 
 ### `NeoGlyphVM`
 
@@ -371,6 +414,70 @@ from neoglyph import Tensor
 
 t = Tensor([1.0, 2.0, 3.0])
 t = Tensor(np.array([1.0, 2.0]))
+```
+
+---
+
+## 可视化
+
+### `plot_fit_curve(regressor, X, y, title, save_path)`
+
+绘制拟合曲线：真实数据点 vs 预测曲线。
+
+```python
+from neoglyph import plot_fit_curve
+
+reg.fit(X, y)
+plot_fit_curve(reg, X, y, title="My Model", save_path="fit.png")
+```
+
+### `plot_evolution_history(history, title, save_path)`
+
+绘制进化损失曲线：每代最佳/平均 fitness。
+
+```python
+from neoglyph import plot_evolution_history
+
+reg.fit(X, y)
+plot_evolution_history(reg.history_, title="Evolution Progress", save_path="loss.png")
+```
+
+### `plot_expression_tree(genome, title, save_path)`
+
+绘制表达式树结构图。
+
+```python
+from neoglyph import plot_expression_tree
+
+reg.fit(X, y)
+plot_expression_tree(reg.best_genome_, title="Best Formula", save_path="tree.png")
+```
+
+### `plot_pareto_front(pareto_genomes, save_path)`
+
+绘制帕累托前沿：误差 vs 复杂度。
+
+```python
+from neoglyph import ParetoFront, plot_pareto_front
+
+front = ParetoFront.select(population, X, y)
+plot_pareto_front(front, save_path="pareto.png")
+```
+
+### `print_tree(genome)`
+
+在终端打印 ASCII 表达式树。
+
+```python
+from neoglyph import print_tree
+
+print_tree(tree)
+# └── EXPR
+#     └── ADD
+#         ├── MUL
+#         │   ├── Var(x)
+#         │   └── Const(2.00)
+#         └── Const(1.00)
 ```
 
 ---
