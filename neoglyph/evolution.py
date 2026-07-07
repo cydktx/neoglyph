@@ -638,6 +638,22 @@ class FitnessSharing:
     
     惩罚过于相似的个体，鼓励种群多样性。
     相似度基于表达式结构重叠。
+    
+    Parameters
+    ----------
+    sigma : float
+        相似度阈值。距离小于此值的个体被视为"相似"。
+        默认 0.3，值越大惩罚越重。
+    alpha : float
+        惩罚强度指数。默认 1.0，值越大惩罚越陡峭。
+    
+    Examples
+    --------
+    >>> sharing = FitnessSharing(sigma=0.3, alpha=1.0)
+    >>> adjusted = sharing.apply(population)
+    >>> for i, g in enumerate(population):
+    ...     g._raw_fitness = g.fitness
+    ...     g.fitness = adjusted[i]
     """
     
     def __init__(self, sigma=0.3, alpha=1.0):

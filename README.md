@@ -157,6 +157,18 @@ print(tree.simplify().to_expression())  # "2 * x + 1"
 - **完整 VM** — 自定义栈式虚拟机，20+ 指令 + 自动微分
 - **应用层** — `SymbolicRegressor`、`PhysicsDiscoverer`，统一 `fit/predict/score` 接口
 
+## 文档
+
+📚 完整文档请查看 [docs/](docs/index.md)：
+
+| 文档 | 内容 |
+|------|------|
+| [符号回归指南](docs/guide_symbolic_regression.md) | 从数据中自动发现数学公式 |
+| [物理公式发现](docs/guide_physics_discovery.md) | 从实验数据发现物理定律 |
+| [可解释 AI](docs/guide_explainable_ai.md) | 将黑箱模型翻译成数学公式 |
+| [API 参考](docs/api_reference.md) | 所有类和方法的详细说明 |
+| [配套工具链](docs/toolchain.md) | 与 NeoGlyph 配合使用的工具生态 |
+
 ## 项目结构
 
 ```
