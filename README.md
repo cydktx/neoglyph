@@ -147,6 +147,12 @@ python -m unittest discover tests/ -v
 - **v2.0** — 线性Genome + 基础进化引擎
 - **v1.0** — VM + Tensor + AutoGrad 基础架构
 
+## ☕ 支持作者
+
+如果这个项目对你有帮助，欢迎请作者喝杯咖啡。
+
+<img src="docs/alipay_qr.jpg" alt="支付宝打赏" width="200">
+
 ## 📝 License
 
 MIT
