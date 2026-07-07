@@ -1,4 +1,5 @@
 import unittest
+import numpy as np
 from neoglyph.evolution import EvolutionEngine
 from neoglyph.genome import Genome
 
@@ -160,6 +161,73 @@ class TestEvolutionIntegration(unittest.TestCase):
             self.assertEqual(len(reports), 1)
         except Exception as e:
             self.fail(f"Verbose evolution raised {e}")
+
+
+class TestEvolutionStrategies(unittest.TestCase):
+    def test_tournament_selector(self):
+        from neoglyph.evolution import TournamentSelector
+        from neoglyph.genome import TreeGenome
+
+        sel = TournamentSelector(tournament_size=3)
+        pop = [TreeGenome.create_random(max_depth=2) for _ in range(10)]
+        for i, g in enumerate(pop):
+            g.fitness = float(i)
+
+        # 选一个
+        best = sel.select(pop, k=1)
+        self.assertIsNotNone(best)
+        self.assertGreater(best.fitness, 0)
+
+        # 选多个
+        selected = sel.select(pop, k=3)
+        self.assertEqual(len(selected), 3)
+
+    def test_sequential_evaluator(self):
+        from neoglyph.evolution import SequentialEvaluator
+        from neoglyph.genome import TreeGenome
+
+        evaluator = SequentialEvaluator()
+        tree = TreeGenome.create_random(max_depth=2)
+        X = np.array([1, 2, 3], dtype=np.float64)
+        target_fn = lambda x: 2 * x + 1
+
+        evaluator.evaluate(tree, X, target_fn)
+        self.assertIsNotNone(tree.fitness)
+        self.assertGreaterEqual(tree.fitness, 0)
+
+    def test_fitness_scorer(self):
+        from neoglyph.evolution import FitnessScorer
+        from neoglyph.genome import TreeGenome
+
+        scorer = FitnessScorer(mdl_weight=0.02)
+        tree = TreeGenome.create_random(max_depth=2)
+        score = scorer.compute_score(tree, accuracy=0.9, complexity=10)
+        self.assertGreater(score, 0)
+        self.assertLess(score, 0.9)
+
+    def test_discovery_scorer(self):
+        from neoglyph.evolution import DiscoveryScorer
+        from neoglyph.genome import TreeGenome
+
+        scorer = DiscoveryScorer(test_inputs=np.array([1.0]), test_y=np.array([3.0]))
+        tree = TreeGenome.create_random(max_depth=2)
+        score = scorer.compute_score(tree, accuracy=0.8, complexity=5)
+        self.assertGreater(score, 0)
+        self.assertLess(score, 1.0)
+
+    def test_parallel_evaluator(self):
+        from neoglyph.evolution import ParallelEvaluator
+        from neoglyph.genome import TreeGenome
+
+        evaluator = ParallelEvaluator(n_workers=2)
+        pop = [TreeGenome.create_random(max_depth=2) for _ in range(5)]
+        X = np.array([1, 2, 3], dtype=np.float64)
+        target_fn = lambda x: 2 * x + 1
+
+        evaluator.evaluate_all(pop, X, target_fn)
+        for g in pop:
+            self.assertIsNotNone(g.fitness)
+            self.assertGreaterEqual(g.fitness, 0)
 
 
 if __name__ == '__main__':

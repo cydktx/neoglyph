@@ -167,6 +167,98 @@ class TestGradients(unittest.TestCase):
         gx = vm.vars['gx']
         np.testing.assert_allclose(gx.grad, np.array([-1.0]))
 
+    def test_sin_grad(self):
+        """d/dx sin(x) = cos(x)"""
+        vm = NeoGlyphVM()
+        script = """
+        PUSH 0
+        STORE x
+
+        TAPE
+        LOAD x
+        SIN
+        STORE y
+        UNTAPE
+
+        GRAD
+
+        LOAD x
+        STORE gx
+        HALT
+        """
+        vm.run(script)
+        gx = vm.vars['gx']
+        np.testing.assert_allclose(gx.grad, np.array([1.0]), rtol=1e-5)
+
+    def test_cos_grad(self):
+        """d/dx cos(x) = -sin(x)"""
+        vm = NeoGlyphVM()
+        script = """
+        PUSH 1.57079632679
+        STORE x
+
+        TAPE
+        LOAD x
+        COS
+        STORE y
+        UNTAPE
+
+        GRAD
+
+        LOAD x
+        STORE gx
+        HALT
+        """
+        vm.run(script)
+        gx = vm.vars['gx']
+        np.testing.assert_allclose(gx.grad, np.array([-1.0]), rtol=1e-5)
+
+    def test_exp_grad(self):
+        """d/dx exp(x) = exp(x)"""
+        vm = NeoGlyphVM()
+        script = """
+        PUSH 0
+        STORE x
+
+        TAPE
+        LOAD x
+        EXP
+        STORE y
+        UNTAPE
+
+        GRAD
+
+        LOAD x
+        STORE gx
+        HALT
+        """
+        vm.run(script)
+        gx = vm.vars['gx']
+        np.testing.assert_allclose(gx.grad, np.array([1.0]), rtol=1e-5)
+
+    def test_log_grad(self):
+        """d/dx log(x) = 1/x"""
+        vm = NeoGlyphVM()
+        script = """
+        PUSH 1
+        STORE x
+
+        TAPE
+        LOAD x
+        LOG
+        STORE y
+        UNTAPE
+
+        GRAD
+
+        LOAD x
+        STORE gx
+        HALT
+        """
+        vm.run(script)
+        gx = vm.vars['gx']
+        np.testing.assert_allclose(gx.grad, np.array([1.0]), rtol=1e-5)
+
     def test_matmul_grad(self):
         vm = NeoGlyphVM()
         script = """

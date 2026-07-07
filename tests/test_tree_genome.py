@@ -1,6 +1,9 @@
 import unittest
 import numpy as np
-from neoglyph import TreeGenome, ConstantNode, VariableNode, OperationNode, NeoGlyphVM
+from neoglyph import (
+    TreeGenome, ConstantNode, VariableNode, OperationNode,
+    NeoGlyphVM, TreeEvolutionEngine
+)
 
 
 class TestTreeGenomeVM(unittest.TestCase):
@@ -54,6 +57,183 @@ class TestTreeGenomeVM(unittest.TestCase):
         vm.run(f'PUSH 10\nSTORE a\n{code}')
         result = vm.stack[-1].data[0]
         self.assertAlmostEqual(result, 5.0, places=5)
+    
+    def test_vm_code_sin(self):
+        tree = TreeGenome(OperationNode('SIN', VariableNode('x')))
+        code = tree.to_vm_code()
+        
+        vm = NeoGlyphVM()
+        vm.run(f'PUSH 0.5\nSTORE a\n{code}')
+        result = vm.stack[-1].data[0]
+        self.assertAlmostEqual(result, np.sin(0.5), places=5)
+    
+    def test_vm_code_cos(self):
+        tree = TreeGenome(OperationNode('COS', VariableNode('x')))
+        code = tree.to_vm_code()
+        
+        vm = NeoGlyphVM()
+        vm.run(f'PUSH 0.5\nSTORE a\n{code}')
+        result = vm.stack[-1].data[0]
+        self.assertAlmostEqual(result, np.cos(0.5), places=5)
+    
+    def test_vm_code_exp(self):
+        tree = TreeGenome(OperationNode('EXP', VariableNode('x')))
+        code = tree.to_vm_code()
+        
+        vm = NeoGlyphVM()
+        vm.run(f'PUSH 1.0\nSTORE a\n{code}')
+        result = vm.stack[-1].data[0]
+        self.assertAlmostEqual(result, np.exp(1.0), places=5)
+    
+    def test_vm_code_log(self):
+        tree = TreeGenome(OperationNode('LOG', VariableNode('x')))
+        code = tree.to_vm_code()
+        
+        vm = NeoGlyphVM()
+        vm.run(f'PUSH 2.0\nSTORE a\n{code}')
+        result = vm.stack[-1].data[0]
+        self.assertAlmostEqual(result, np.log(2.0), places=5)
+    
+    def test_vm_code_neg(self):
+        tree = TreeGenome(OperationNode('NEG', VariableNode('x')))
+        code = tree.to_vm_code()
+        
+        vm = NeoGlyphVM()
+        vm.run(f'PUSH 5.0\nSTORE a\n{code}')
+        result = vm.stack[-1].data[0]
+        self.assertAlmostEqual(result, -5.0, places=5)
+
+
+class TestTreeGenomeCrossover(unittest.TestCase):
+    def test_crossover_produces_valid_tree(self):
+        p1 = TreeGenome(OperationNode('ADD', VariableNode('x'), ConstantNode(1.0)))
+        p2 = TreeGenome(OperationNode('MUL', VariableNode('x'), ConstantNode(2.0)))
+        child = TreeGenome.crossover(p1, p2)
+        self.assertIsNotNone(child.root)
+        self.assertIsInstance(child, TreeGenome)
+    
+    def test_crossover_with_none(self):
+        """当一个父本没有操作节点时，直接复制另一个"""
+        p1 = TreeGenome(ConstantNode(5.0))
+        p2 = TreeGenome(OperationNode('ADD', VariableNode('x'), ConstantNode(1.0)))
+        child = TreeGenome.crossover(p1, p2)
+        self.assertIsNotNone(child.root)
+    
+    def test_crossover_preserves_structure(self):
+        p1 = TreeGenome(OperationNode('MUL', 
+            OperationNode('ADD', VariableNode('x'), ConstantNode(1.0)),
+            ConstantNode(3.0)))
+        p2 = TreeGenome(OperationNode('SUB', 
+            OperationNode('SIN', VariableNode('x')),
+            ConstantNode(2.0)))
+        child = TreeGenome.crossover(p1, p2)
+        self.assertIsNotNone(child.root)
+        # 验证子代可以正常评估
+        result = child.root.evaluate(2.0)
+        self.assertIsInstance(result, (int, float, np.floating))
+
+
+class TestTreeEvolutionEngine(unittest.TestCase):
+    def test_engine_initialization(self):
+        engine = TreeEvolutionEngine(pop_size=20, max_depth=2, mutation_rate=0.3)
+        engine.initialize_population()
+        self.assertEqual(len(engine.population), 20)
+    
+    def test_engine_evolve_linear(self):
+        target_fn = lambda x: x * 2 + 1
+        inputs = np.array([-5, -3, -1, 1, 3, 5], dtype=np.float32)
+        
+        engine = TreeEvolutionEngine(pop_size=30, max_depth=2, mutation_rate=0.3)
+        engine.initialize_population()
+        best = engine.evolve(inputs, target_fn, generations=60)
+        
+        self.assertIsNotNone(best)
+        self.assertGreater(best.fitness, 0.3,
+            f"Should reach fitness > 0.3, got {best.fitness:.4f}")
+    
+    def test_engine_summary(self):
+        target_fn = lambda x: x + 1
+        inputs = np.array([-2, 0, 2], dtype=np.float32)
+        
+        engine = TreeEvolutionEngine(pop_size=10, max_depth=2, mutation_rate=0.3)
+        engine.initialize_population()
+        engine.evolve(inputs, target_fn, generations=5)
+        summary = engine.get_summary()
+        
+        self.assertIsNotNone(summary)
+        self.assertIn('total_generations', summary)
+        self.assertIn('final_fitness', summary)
+        self.assertEqual(summary['total_generations'], 5)
+
+
+class TestTreeNodeOperations(unittest.TestCase):
+    def test_constant_node(self):
+        c = ConstantNode(3.14)
+        self.assertAlmostEqual(c.evaluate(0), 3.14, places=5)
+        self.assertEqual(c.to_expression(), '3.14')
+        self.assertEqual(c.to_vm_code(), 'PUSH 3.14')
+    
+    def test_variable_node(self):
+        v = VariableNode('x')
+        self.assertAlmostEqual(v.evaluate(5.0), 5.0, places=5)
+        self.assertEqual(v.to_expression(), 'x')
+        self.assertEqual(v.to_vm_code(), 'LOAD a')
+    
+    def test_sin_simplify_zero(self):
+        op = OperationNode('SIN', ConstantNode(0.0))
+        simplified = op.simplify()
+        self.assertAlmostEqual(simplified.evaluate(0), 0.0, places=5)
+    
+    def test_exp_simplify_zero(self):
+        op = OperationNode('EXP', ConstantNode(0.0))
+        simplified = op.simplify()
+        self.assertAlmostEqual(simplified.evaluate(0), 1.0, places=5)
+    
+    def test_log_simplify_one(self):
+        op = OperationNode('LOG', ConstantNode(1.0))
+        simplified = op.simplify()
+        self.assertAlmostEqual(simplified.evaluate(0), 0.0, places=5)
+    
+    def test_neg_simplify_constant(self):
+        op = OperationNode('NEG', ConstantNode(5.0))
+        simplified = op.simplify()
+        self.assertAlmostEqual(simplified.evaluate(0), -5.0, places=5)
+    
+    def test_like_terms_with_unary(self):
+        """SIN(x) + 2*x 不应崩溃，应优雅降级"""
+        tree = OperationNode('ADD',
+            OperationNode('SIN', VariableNode('x')),
+            OperationNode('MUL', VariableNode('x'), ConstantNode(2.0)))
+        simplified = tree.simplify()
+        self.assertIsNotNone(simplified)
+
+
+class TestTreeGenomeEvaluateArray(unittest.TestCase):
+    def test_perfect_match(self):
+        """完美匹配的表达式应该有高 accuracy"""
+        tree = TreeGenome(OperationNode('ADD',
+            OperationNode('MUL', VariableNode('x'), ConstantNode(2.0)),
+            ConstantNode(1.0)))
+        X = np.array([1, 2, 3], dtype=np.float64)
+        y = 2 * X + 1
+        result = tree.evaluate_array(X, y)
+        self.assertAlmostEqual(result['accuracy'], 1.0, places=2)
+        self.assertLess(result['mse'], 0.001)
+
+    def test_poor_match(self):
+        """不匹配的表达式应该有低 accuracy"""
+        tree = TreeGenome(ConstantNode(0.0))
+        X = np.array([1, 2, 3], dtype=np.float64)
+        y = np.array([10, 20, 30], dtype=np.float64)
+        result = tree.evaluate_array(X, y)
+        self.assertLess(result['accuracy'], 0.3)
+
+    def test_invalid_count(self):
+        tree = TreeGenome(OperationNode('ADD', VariableNode('x'), ConstantNode(1.0)))
+        X = np.array([1, 2, 3], dtype=np.float64)
+        y = np.array([3, 5, 7], dtype=np.float64)
+        result = tree.evaluate_array(X, y)
+        self.assertEqual(result['valid_count'], 3)
 
 
 class TestTreeGenomeEvolve(unittest.TestCase):

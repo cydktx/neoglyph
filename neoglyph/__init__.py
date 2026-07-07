@@ -10,13 +10,29 @@ from .genome import (
     ArchiveMemory
 )
 from .profiler import Profiler
-from .evolution import EvolutionEngine
+from .evolution import (
+    EvolutionEngine,
+    TreeEvolutionEngine,
+    SequentialEvaluator,
+    ParallelEvaluator,
+    TournamentSelector,
+    FitnessScorer,
+    DiscoveryScorer,
+    EarlyStopper,
+    FitnessSharing,
+    IslandModel,
+)
 from .evolution_advanced import (
     DiscoveryScore,
     InvalidProgramFilter,
-    ParallelEvaluator,
     CurriculumEvolution,
     AdvancedEvolutionEngine
 )
+from .applications import (
+    BaseApplication,
+    SymbolicRegressor,
+    PhysicsDiscoverer,
+    ParallelSymbolicRegressor,
+)
 
-__version__ = "3.2"
+__version__ = "4.0"

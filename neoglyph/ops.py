@@ -191,3 +191,66 @@ class MatMulOp(OpBase):
             a_id: np.dot(grad_out, b_data.T),
             b_id: np.dot(a_data.T, grad_out)
         }
+
+
+@register_op('SIN')
+class SinOp(OpBase):
+    name = 'sin'
+
+    def execute(self, vm):
+        a = vm.stack.pop()
+        out = Tensor(np.sin(a.data))
+        vm.stack.append(out)
+        self.record(vm, out, a)
+
+    def backward(self, vm, out_id, grad_out, a_id):
+        a = vm._obj_map[a_id]
+        return {a_id: np.cos(a.data) * grad_out}
+
+
+@register_op('COS')
+class CosOp(OpBase):
+    name = 'cos'
+
+    def execute(self, vm):
+        a = vm.stack.pop()
+        out = Tensor(np.cos(a.data))
+        vm.stack.append(out)
+        self.record(vm, out, a)
+
+    def backward(self, vm, out_id, grad_out, a_id):
+        a = vm._obj_map[a_id]
+        return {a_id: -np.sin(a.data) * grad_out}
+
+
+@register_op('EXP')
+class ExpOp(OpBase):
+    name = 'exp'
+
+    def execute(self, vm):
+        a = vm.stack.pop()
+        clipped = np.clip(a.data, -80, 80)  # 防止溢出
+        out = Tensor(np.exp(clipped))
+        vm.stack.append(out)
+        self.record(vm, out, a)
+
+    def backward(self, vm, out_id, grad_out, a_id):
+        out = vm._obj_map[out_id]
+        return {a_id: out.data * grad_out}
+
+
+@register_op('LOG')
+class LogOp(OpBase):
+    name = 'log'
+
+    def execute(self, vm):
+        a = vm.stack.pop()
+        safe_a = np.maximum(a.data, 1e-10)
+        out = Tensor(np.log(safe_a))
+        vm.stack.append(out)
+        self.record(vm, out, a)
+
+    def backward(self, vm, out_id, grad_out, a_id):
+        a = vm._obj_map[a_id]
+        safe_a = np.maximum(a.data, 1e-10)
+        return {a_id: grad_out / safe_a}

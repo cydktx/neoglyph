@@ -1,7 +1,13 @@
 import unittest
 import json
 import os
+import sys
 import numpy as np
+
+# 添加 examples 目录到 Python 路径
+_examples_dir = os.path.join(os.path.dirname(__file__), '..', 'examples')
+if _examples_dir not in sys.path:
+    sys.path.insert(0, os.path.abspath(_examples_dir))
 
 
 class TestEvolutionDemo(unittest.TestCase):

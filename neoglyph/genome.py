@@ -24,7 +24,7 @@ class ProgramNode:
         """转换为可读表达式"""
         raise NotImplementedError
     
-    def to_vm_code(self):
+    def to_vm_code(self, var_map=None):
         """转换为VM代码"""
         raise NotImplementedError
     
@@ -68,7 +68,7 @@ class ConstantNode(ProgramNode):
             return f"({display_val})"
         return str(display_val)
     
-    def to_vm_code(self):
+    def to_vm_code(self, var_map=None):
         return f"PUSH {self.value}"
     
     def copy(self):
@@ -91,7 +91,11 @@ class ConstantNode(ProgramNode):
 
 
 class VariableNode(ProgramNode):
-    """变量节点"""
+    """变量节点 - 支持单变量和多变量
+    
+    单变量: evaluate(3.0) → 3.0
+    多变量: evaluate({'x': 3.0, 'y': 4.0}) → 按 name 查找
+    """
     
     def __init__(self, name='x'):
         super().__init__()
@@ -99,13 +103,16 @@ class VariableNode(ProgramNode):
         self.node_type = 'variable'
     
     def evaluate(self, x):
-        return float(x)
+        if isinstance(x, dict):
+            return float(x.get(self.name, 0.0))
+        return np.asarray(x, dtype=np.float64)
     
     def to_expression(self):
         return self.name
     
-    def to_vm_code(self):
-        var_map = {'x': 'a'}
+    def to_vm_code(self, var_map=None):
+        if var_map is None:
+            var_map = {'x': 'a'}
         vm_var = var_map.get(self.name, self.name)
         return f"LOAD {vm_var}"
     
@@ -141,9 +148,17 @@ class OperationNode(ProgramNode):
         'ADD': lambda a, b: a + b,
         'SUB': lambda a, b: a - b,
         'MUL': lambda a, b: a * b,
-        'DIV': lambda a, b: a / b if b != 0 else 0.0,
+        'DIV': lambda a, b: (
+            np.divide(a, b, out=np.zeros_like(np.asarray(a, dtype=np.float64)), 
+                      where=np.abs(np.asarray(b, dtype=np.float64)) > 1e-15)),
+        'SIN': lambda a: np.sin(a),
+        'COS': lambda a: np.cos(a),
+        'EXP': lambda a: np.exp(np.clip(a, -80, 80)),
+        'LOG': lambda a: np.log(np.maximum(a, 1e-10)),
+        'NEG': lambda a: -a,
     }
     
+    UNARY_OPS = ['SIN', 'COS', 'EXP', 'LOG', 'NEG']
     COMMUTATIVE_OPS = ['ADD', 'MUL']
     
     def __init__(self, op, left=None, right=None):
@@ -168,6 +183,15 @@ class OperationNode(ProgramNode):
             self.parent._mark_dirty()
     
     def evaluate(self, x):
+        if self.op in self.UNARY_OPS:
+            if self.left is None:
+                return 0.0
+            val = self.left.evaluate(x)
+            try:
+                return self.OPERATIONS[self.op](val)
+            except Exception:
+                return 0.0
+        
         if self.left is None or self.right is None:
             return 0.0
         
@@ -191,6 +215,42 @@ class OperationNode(ProgramNode):
             return self._simplified_cache
         
         if self.left is None or self.right is None:
+            if self.op in self.UNARY_OPS:
+                # 一元操作：只需要左子节点
+                if self.left is None:
+                    self._simplified_cache = self
+                    self._cache_dirty = False
+                    return self
+                # 简化子节点（仅操作为节点）
+                if self.left.node_type == 'operation':
+                    simplified_left = self.left.simplify()
+                    if simplified_left != self.left:
+                        self.left = simplified_left
+                        self.left.parent = self
+                
+                # 一元操作简化规则
+                if self.op == 'NEG' and self.left.node_type == 'constant':
+                    result = ConstantNode(-self.left.value)
+                    self._simplified_cache = result
+                    self._cache_dirty = False
+                    return result
+                if self.op == 'EXP' and self.left.node_type == 'constant' and self.left.value == 0.0:
+                    self._simplified_cache = ConstantNode(1.0)
+                    self._cache_dirty = False
+                    return ConstantNode(1.0)
+                if self.op == 'LOG' and self.left.node_type == 'constant' and self.left.value == 1.0:
+                    self._simplified_cache = ConstantNode(0.0)
+                    self._cache_dirty = False
+                    return ConstantNode(0.0)
+                if self.op == 'SIN' and self.left.node_type == 'constant' and self.left.value == 0.0:
+                    self._simplified_cache = ConstantNode(0.0)
+                    self._cache_dirty = False
+                    return ConstantNode(0.0)
+                
+                self._simplified_cache = self
+                self._cache_dirty = False
+                return self
+            
             self._simplified_cache = self
             self._cache_dirty = False
             return self
@@ -259,8 +319,12 @@ class OperationNode(ProgramNode):
             return None
         
         # 合并系数
-        left_x_coeff, left_const = left_info
-        right_x_coeff, right_const = right_info
+        left_x_coeff, left_const, left_var = left_info
+        right_x_coeff, right_const, right_var = right_info
+        
+        # 变量名不同则不合并（如 x + y 不应合并为 2*x）
+        if left_var != right_var:
+            return None
         
         # 根据操作符调整右子树系数
         if self.op == 'SUB':
@@ -280,10 +344,10 @@ class OperationNode(ProgramNode):
         
         if total_x_coeff != 0:
             if total_x_coeff == 1:
-                x_part = VariableNode('x')
+                x_part = VariableNode(left_var)
             else:
                 x_part = OperationNode('MUL', 
-                                        VariableNode('x'), 
+                                        VariableNode(left_var), 
                                         ConstantNode(total_x_coeff))
         
         if total_const != 0:
@@ -303,46 +367,60 @@ class OperationNode(ProgramNode):
             return ConstantNode(0.0)
     
     def _extract_term_info(self, node):
-        """提取节点的项信息 (x系数, 常数项)
+        """提取节点的项信息 (x系数, 常数项, 变量名)
         
-        返回 (x_coefficient, constant_term) 或 None
+        返回 (x_coefficient, constant_term, var_name) 或 None
+        var_name 用于区分不同变量，防止 x+y 被错误合并为 2*x
         """
+        if node is None:
+            return None
+        
         if node.node_type == 'constant':
-            return (0.0, node.value)
+            return (0.0, node.value, None)
         
         if node.node_type == 'variable':
-            return (1.0, 0.0)
+            return (1.0, 0.0, node.name)
         
         if node.node_type == 'operation':
+            # 一元操作（如SIN/COS/EXP/LOG/NEG）不作为项处理
+            if node.op in OperationNode.UNARY_OPS:
+                return None
+            
             if node.op == 'MUL':
+                # 确保子节点非空
+                if node.left is None or node.right is None:
+                    return None
                 # a*x 或 x*a
                 if node.left.node_type == 'constant' and node.right.node_type == 'variable':
-                    return (node.left.value, 0.0)
+                    return (node.left.value, 0.0, node.right.name)
                 if node.left.node_type == 'variable' and node.right.node_type == 'constant':
-                    return (node.right.value, 0.0)
+                    return (node.right.value, 0.0, node.left.name)
                 # 两个都是常数
                 if node.left.node_type == 'constant' and node.right.node_type == 'constant':
-                    return (0.0, node.left.value * node.right.value)
+                    return (0.0, node.left.value * node.right.value, None)
             
             elif node.op == 'ADD':
                 left_info = self._extract_term_info(node.left)
                 right_info = self._extract_term_info(node.right)
                 if left_info and right_info:
-                    return (left_info[0] + right_info[0], left_info[1] + right_info[1])
+                    # 只有变量名相同时才合并系数
+                    if left_info[2] == right_info[2]:
+                        return (left_info[0] + right_info[0], left_info[1] + right_info[1], left_info[2])
             
             elif node.op == 'SUB':
                 left_info = self._extract_term_info(node.left)
                 right_info = self._extract_term_info(node.right)
                 if left_info and right_info:
-                    return (left_info[0] - right_info[0], left_info[1] - right_info[1])
+                    if left_info[2] == right_info[2]:
+                        return (left_info[0] - right_info[0], left_info[1] - right_info[1], left_info[2])
         
         return None
     
     def _canonicalize_constants(self):
         """常数规范化：近似整数恢复成整数"""
-        if self.left.node_type == 'constant':
+        if self.left is not None and self.left.node_type == 'constant':
             self.left.value = self._canonicalize_value(self.left.value)
-        if self.right.node_type == 'constant':
+        if self.right is not None and self.right.node_type == 'constant':
             self.right.value = self._canonicalize_value(self.right.value)
     
     def _canonicalize_value(self, value):
@@ -430,6 +508,8 @@ class OperationNode(ProgramNode):
         """交换律规范化：确保常数在右边"""
         if self.op not in self.COMMUTATIVE_OPS:
             return
+        if self.left is None or self.right is None:
+            return
         
         # 交换律：常数在右边，变量在左边
         if self.left.node_type == 'constant' and self.right.node_type != 'constant':
@@ -442,6 +522,9 @@ class OperationNode(ProgramNode):
         if self.left.node_type == 'operation' and self.left.op == self.op:
             left_left = self.left.left
             left_right = self.left.right
+            
+            if left_left is None or self.right is None:
+                return
             
             # 重组为更标准的形式
             if left_left.node_type == 'variable' and self.right.node_type == 'constant':
@@ -459,6 +542,19 @@ class OperationNode(ProgramNode):
         
         修复：避免递归调用to_expression导致的无限递归
         """
+        # 一元操作
+        if self.op in self.UNARY_OPS:
+            if self.left is None:
+                return "0"
+            if self.left.node_type == 'operation':
+                simplified = self.left.simplify()
+                inner = simplified.to_expression()
+            else:
+                inner = self.left.to_expression()
+            if self.op == 'NEG':
+                return f"-({inner})" if inner.startswith('-') else f"-{inner}"
+            return f"{self.op.lower()}({inner})"
+        
         if self.left is None or self.right is None:
             return "0"
         
@@ -511,19 +607,24 @@ class OperationNode(ProgramNode):
         
         return f"{self.op}({left_expr}, {right_expr})"
     
-    def to_vm_code(self):
+    def to_vm_code(self, var_map=None):
         """转换为VM代码（表达式求值后留在栈顶）"""
+        # 一元操作
+        if self.op in self.UNARY_OPS:
+            left_code = self.left.to_vm_code(var_map) if self.left else "PUSH 0"
+            return f"{left_code}\n{self.op}"
+        
         if self.left is None or self.right is None:
             return "PUSH 0"
         
         code_parts = []
         
         # 左子树代码（结果留在栈顶）
-        left_code = self.left.to_vm_code()
+        left_code = self.left.to_vm_code(var_map)
         code_parts.append(left_code)
         
         # 右子树代码（结果留在栈顶）
-        right_code = self.right.to_vm_code()
+        right_code = self.right.to_vm_code(var_map)
         code_parts.append(right_code)
         
         # 操作（弹出两个操作数，压入结果）
@@ -584,16 +685,20 @@ class TreeGenome:
         self.archive_key = None  # Archive Memory索引
     
     @staticmethod
-    def create_random(max_depth=3):
+    def create_random(max_depth=3, variable_names=None):
         """创建随机Tree Genome - Evolution Core 3.2增强
         
         智能随机生成：偏向合理数学结构
+        
+        variable_names: 变量名列表，如 ['x', 'y']，默认 ['x']
         """
-        root = TreeGenome._generate_random_tree(max_depth)
+        if variable_names is None:
+            variable_names = ['x']
+        root = TreeGenome._generate_random_tree(max_depth, variable_names=variable_names)
         return TreeGenome(root)
     
     @staticmethod
-    def _generate_random_tree(depth, is_left=True):
+    def _generate_random_tree(depth, is_left=True, variable_names=None):
         """生成随机树结构 - Evolution Core 3.2增强
         
         智能随机生成：
@@ -601,12 +706,17 @@ class TreeGenome:
         - 右子树更浅（模拟 a*x+b 形式）
         - 30%概率提前终止（避免过深）
         - 常数偏向简单值（整数）
+        - 多变量支持：从 variable_names 中随机选择
         """
+        if variable_names is None:
+            variable_names = ['x']
+        
         # 30%概率提前终止（避免过深）
         if depth == 0 or random.random() < 0.3:
             # 叶节点：40%变量，60%常数
             if random.random() < 0.4:
-                return VariableNode('x')
+                var_name = random.choice(variable_names)
+                return VariableNode(var_name)
             else:
                 # 常数偏向简单值
                 if random.random() < 0.7:
@@ -615,12 +725,17 @@ class TreeGenome:
                     value = random.uniform(-5, 5)
                 return ConstantNode(value)
         
-        # 操作节点：偏向ADD和MUL（数学上更有用）
-        op_weights = [0.35, 0.25, 0.30, 0.10]  # ADD, SUB, MUL, DIV
-        ops = ['ADD', 'SUB', 'MUL', 'DIV']
+        # 操作节点：偏向ADD和MUL（数学上更有用），包含一元函数
+        op_weights = [0.25, 0.15, 0.20, 0.05, 0.10, 0.10, 0.10, 0.05]  # ADD, SUB, MUL, DIV, SIN, COS, EXP, LOG
+        ops = ['ADD', 'SUB', 'MUL', 'DIV', 'SIN', 'COS', 'EXP', 'LOG']
         op = random.choices(ops, weights=op_weights, k=1)[0]
         
-        # 不平衡树：左子树更深，右子树更浅（模拟 a*x+b 形式）
+        if op in OperationNode.UNARY_OPS:
+            # 一元操作：只需要左子节点
+            left = TreeGenome._generate_random_tree(depth - 1, is_left=True, variable_names=variable_names)
+            return OperationNode(op, left=left)
+        
+        # 二元操作：不平衡树，左子树更深，右子树更浅（模拟 a*x+b 形式）
         if is_left:
             left_depth = depth - 1
             right_depth = max(depth - 2, 0)
@@ -628,20 +743,25 @@ class TreeGenome:
             left_depth = max(depth - 2, 0)
             right_depth = max(depth - 2, 0)
         
-        left = TreeGenome._generate_random_tree(left_depth, is_left=True)
-        right = TreeGenome._generate_random_tree(right_depth, is_left=False)
+        left = TreeGenome._generate_random_tree(left_depth, is_left=True, variable_names=variable_names)
+        right = TreeGenome._generate_random_tree(right_depth, is_left=False, variable_names=variable_names)
         
         return OperationNode(op, left, right)
     
     def evaluate(self, inputs):
-        """评估Tree Genome在多个输入上的表现"""
+        """评估Tree Genome在多个输入上的表现
+        
+        支持单变量和多变量：
+        - 单变量: inputs = [1.0, 2.0, 3.0]
+        - 多变量: inputs = [{'x': 1.0, 'y': 2.0}, ...]
+        """
         total_error = 0.0
         valid_count = 0
         
         for x in inputs:
             try:
                 result = self.root.evaluate(x)
-                total_error += result ** 2  # 基础误差（未指定target）
+                total_error += result ** 2
                 valid_count += 1
             except Exception:
                 pass
@@ -675,13 +795,72 @@ class TreeGenome:
             'valid_count': valid_count
         }
     
-    def calculate_fitness(self, inputs, target_fn, mdl_weight=0.1):
+    def evaluate_array(self, X, y):
+        """用数组数据直接评估（用于符号回归）
+        
+        X: 输入数组 (n_samples,) 单变量 或 (n_samples, n_features) 多变量
+        y: 目标数组 (n_samples,)
+        
+        返回 accuracy (1 / (1 + mse))
+        
+        单变量路径使用向量化计算，大幅提升性能。
+        """
+        if self.root is None:
+            return {'mse': float('inf'), 'accuracy': 0.0, 'valid_count': 0}
+        
+        X = np.asarray(X, dtype=np.float64)
+        y = np.asarray(y, dtype=np.float64).ravel()
+        
+        # 收集变量名
+        var_names = sorted(self._collect_variables(self.root))
+        if not var_names:
+            var_names = ['x']
+        
+        try:
+            if X.ndim == 1 and len(var_names) == 1:
+                # 单变量向量化路径：整数组一次性通过表达式树求值
+                actual = self.root.evaluate(X)
+                actual = np.asarray(actual, dtype=np.float64).ravel()
+                error = (actual - y) ** 2
+                mse = float(np.mean(error))
+                valid_count = len(X)
+            else:
+                # 多变量逐样本路径
+                total_error = 0.0
+                valid_count = 0
+                for i in range(len(X)):
+                    try:
+                        x_val = {var_names[j]: float(X[i, j]) for j in range(min(X.shape[1], len(var_names)))}
+                        actual = self.root.evaluate(x_val)
+                        error = (actual - float(y[i])) ** 2
+                        total_error += error
+                        valid_count += 1
+                    except Exception:
+                        pass
+                mse = total_error / max(valid_count, 1)
+        except Exception:
+            return {'mse': float('inf'), 'accuracy': 0.0, 'valid_count': 0}
+        
+        if valid_count == 0:
+            return {'mse': float('inf'), 'accuracy': 0.0, 'valid_count': 0}
+        
+        accuracy = 1.0 / (1.0 + mse)
+        
+        return {
+            'mse': mse,
+            'accuracy': accuracy,
+            'valid_count': valid_count
+        }
+    
+    def calculate_fitness(self, inputs, target_fn, mdl_weight=0.05):
         """计算Fitness + MDL复杂度 + Human Readability
         
         Evolution Core 3.1: 三维度评分
         - accuracy
         - simplicity (MDL)
         - readability (human readability score)
+        
+        改进：降低MDL惩罚权重，使进化能发现更复杂的表达式
         """
         eval_result = self.evaluate_with_target(inputs, target_fn)
         
@@ -693,20 +872,21 @@ class TreeGenome:
         # 简化表达式
         simplified = self.simplify()
         
-        # MDL复杂度评分（归一化）
+        # MDL复杂度评分（归一化，降低惩罚）
         complexity = self.get_complexity()
-        normalized_complexity = complexity / 20.0
+        normalized_complexity = complexity / 30.0  # 从20放大到30，降低惩罚
         mdl_penalty = normalized_complexity * mdl_weight
         
         # Human Readability Score
         readability_score = self._calculate_readability_score()
-        readability_bonus = readability_score * 0.1
+        readability_bonus = readability_score * 0.05  # 降低可读性奖励权重
         
         # Fitness = accuracy - MDL_penalty + readability_bonus
-        self.fitness = eval_result['accuracy'] - mdl_penalty + readability_bonus
-        self.mdl_score = eval_result['mse'] + complexity * 0.05
+        base_fitness = eval_result['accuracy'] - mdl_penalty + readability_bonus
+        self.fitness = max(base_fitness, 0.001)
+        self.mdl_score = eval_result['mse'] + complexity * 0.03  # 降低MDL惩罚
         
-        return max(self.fitness, 0.001)
+        return self.fitness
     
     def simplify(self):
         """符号简化"""
@@ -803,10 +983,38 @@ class TreeGenome:
         return self.root.to_expression()
     
     def to_vm_code(self):
-        """转换为VM代码"""
+        """转换为VM代码，自动处理多变量
+        
+        收集表达式树中的所有变量名，映射到VM寄存器（a, b, c, ...），
+        并在表达式求值前插入 PUSH+STORE 设置代码。
+        """
         if self.root is None:
             return "PUSH 0"
-        return self.root.to_vm_code()
+        
+        # 收集所有变量名
+        var_names = sorted(self._collect_variables(self.root))
+        var_map = {}
+        for i, name in enumerate(var_names):
+            var_map[name] = chr(ord('a') + i)
+        
+        # 表达式求值代码
+        expr_code = self.root.to_vm_code(var_map)
+        
+        return expr_code
+    
+    def _collect_variables(self, node):
+        """递归收集表达式树中的所有变量名"""
+        names = set()
+        if node is None:
+            return names
+        if node.node_type == 'variable':
+            names.add(node.name)
+        if node.node_type == 'operation':
+            if node.left:
+                names.update(self._collect_variables(node.left))
+            if node.right:
+                names.update(self._collect_variables(node.right))
+        return names
     
     def copy(self):
         """深拷贝Tree Genome"""
@@ -826,7 +1034,7 @@ class TreeGenome:
         """结构化变异
         
         包括：
-        - replace_node: 替换节点
+        - replace_node: 替换节点（含一元操作算子）
         - add_branch: 添加分支
         - remove_branch: 删除分支
         - optimize_constant: 优化常数
@@ -835,7 +1043,7 @@ class TreeGenome:
             return
         
         # Protected Gene机制：高fitness降低变异率
-        effective_rate = mutation_rate * (1 - fitness * 0.5)
+        effective_rate = mutation_rate * (1 - fitness * 0.3)
         
         nodes = self.root.get_nodes()
         
@@ -846,17 +1054,27 @@ class TreeGenome:
                     if random.random() > 0.2:  # 80%概率跳过保护节点
                         continue
                 
-                # 选择变异类型
+                # 选择变异类型（高fitness时偏向常数优化和微调）
                 mutation_type = random.random()
                 
-                if mutation_type < 0.3:
-                    self._replace_node(node)
-                elif mutation_type < 0.5:
-                    self._optimize_constant(node)
-                elif mutation_type < 0.7:
-                    self._add_branch(node)
+                if fitness > 0.8:
+                    # 高fitness：偏向常数优化和微调
+                    if mutation_type < 0.4:
+                        self._optimize_constant(node)
+                    elif mutation_type < 0.7:
+                        self._replace_node(node)
+                    else:
+                        self._add_branch(node) if random.random() < 0.5 else self._remove_branch(node)
                 else:
-                    self._remove_branch(node)
+                    # 低fitness：探索性变异
+                    if mutation_type < 0.3:
+                        self._replace_node(node)
+                    elif mutation_type < 0.5:
+                        self._optimize_constant(node)
+                    elif mutation_type < 0.7:
+                        self._add_branch(node)
+                    else:
+                        self._remove_branch(node)
     
     def _replace_node(self, node):
         """替换节点"""
@@ -867,9 +1085,21 @@ class TreeGenome:
             # 变量节点不变
             pass
         elif node.node_type == 'operation':
-            # 替换操作
-            new_op = random.choice(['ADD', 'SUB', 'MUL', 'DIV'])
+            # 替换操作（包含一元操作算子）
+            all_ops = ['ADD', 'SUB', 'MUL', 'DIV', 'SIN', 'COS', 'EXP', 'LOG', 'NEG']
+            old_op = node.op
+            # 确保不会替换成同一个操作
+            candidates = [o for o in all_ops if o != old_op]
+            new_op = random.choice(candidates)
             node.op = new_op
+            # 如果从一元变为二元，需要补充右子节点
+            if old_op in OperationNode.UNARY_OPS and new_op not in OperationNode.UNARY_OPS:
+                if node.right is None:
+                    node.right = TreeGenome._generate_random_tree(1, is_left=False)
+                    node.right.parent = node
+            # 如果从二元变为一元，需要清空右子节点
+            if old_op not in OperationNode.UNARY_OPS and new_op in OperationNode.UNARY_OPS:
+                node.right = None
     
     def _optimize_constant(self, node):
         """优化常数节点"""
@@ -936,6 +1166,61 @@ class TreeGenome:
                 node.protected = True
                 self.protected_nodes.append(node)
     
+    @staticmethod
+    def crossover(parent1, parent2):
+        """TreeGenome 交叉：交换随机子树
+        
+        策略：
+        - 从每个父本中随机选择一个操作节点
+        - 交换这两个子树
+        - 如果一方没有操作节点，则直接复制另一方
+        """
+        # 确保两个父本都有树结构
+        if parent1.root is None and parent2.root is None:
+            return TreeGenome(None)
+        if parent1.root is None:
+            return parent2.copy()
+        if parent2.root is None:
+            return parent1.copy()
+        
+        # 获取所有操作节点（排除叶节点）
+        nodes1 = [n for n in parent1.root.get_nodes() if n.node_type == 'operation']
+        nodes2 = [n for n in parent2.root.get_nodes() if n.node_type == 'operation']
+        
+        # 如果任一方没有操作节点，直接复制
+        if not nodes1 or not nodes2:
+            child = parent1.copy() if random.random() < 0.5 else parent2.copy()
+            return child
+        
+        # 从每个父本随机选一个操作节点
+        point1 = random.choice(nodes1)
+        point2 = random.choice(nodes2)
+        
+        # 构建子代：复制 parent1，用 parent2 的子树替换对应节点
+        child = parent1.copy()
+        
+        # 找到 child 中对应 point1 位置的节点
+        child_nodes = child.root.get_nodes()
+        child_op_nodes = [n for n in child_nodes if n.node_type == 'operation']
+        
+        if child_op_nodes:
+            # 用 parent2 的子树替换第一个操作节点
+            target = child_op_nodes[0]
+            replacement = point2.copy()
+            replacement.parent = target.parent
+            
+            if target.parent:
+                if target.parent.left == target:
+                    target.parent.left = replacement
+                else:
+                    target.parent.right = replacement
+            else:
+                child.root = replacement
+        
+        child.fitness = 0.0
+        child.mdl_score = 0.0
+        return child
+    
     def __repr__(self):
         return f"TreeGenome(expr={self.to_expression()}, fitness={self.fitness:.4f}, mdl={self.mdl_score:.2f})"
     
@@ -944,469 +1229,6 @@ class TreeGenome:
 
 
 # ============================================================================
-# Archive Memory - Evolution Core 3.0
+# 向后兼容：线性 Genome 已移至 genome_linear.py
 # ============================================================================
-
-class ArchiveMemory:
-    """Archive Memory - 保存历史优秀程序结构
-    
-    Evolution Core 3.1: 升级保存抽象程序模式
-    """
-    
-    def __init__(self, max_size=50):
-        self.max_size = max_size
-        self.archive = {}  # key: expression, value: genome
-        self.pattern_archive = {}  # key: abstract pattern, value: list of genomes
-        self.fitness_history = []
-    
-    def add(self, genome):
-        """添加优秀程序到Archive - Evolution Core 3.1增强"""
-        if genome.fitness < 0.1:  # 只保存高fitness程序
-            return
-        
-        # 先简化
-        simplified = genome.simplify()
-        expression = simplified.to_expression()
-        
-        # 提取抽象模式
-        pattern = self._extract_abstract_pattern(expression)
-        
-        # 检查是否已存在
-        if expression in self.archive:
-            # 更新fitness
-            if genome.fitness > self.archive[expression].fitness:
-                self.archive[expression] = genome.copy()
-            return
-        
-        # 添加新程序
-        if len(self.archive) >= self.max_size:
-            # 移除最低fitness的程序
-            worst_key = min(self.archive.keys(), 
-                          key=lambda k: self.archive[k].fitness)
-            del self.archive[worst_key]
-        
-        genome.archive_key = expression
-        self.archive[expression] = genome.copy()
-        
-        # 添加到模式Archive
-        if pattern not in self.pattern_archive:
-            self.pattern_archive[pattern] = []
-        
-        self.pattern_archive[pattern].append(genome.copy())
-        
-        # 限制每个模式最多保存5个实例
-        if len(self.pattern_archive[pattern]) > 5:
-            # 移除最低fitness的实例
-            self.pattern_archive[pattern].sort(key=lambda g: g.fitness, reverse=True)
-            self.pattern_archive[pattern] = self.pattern_archive[pattern][:5]
-        
-        # 记录fitness历史
-        self.fitness_history.append({
-            'expression': expression,
-            'pattern': pattern,
-            'fitness': genome.fitness,
-            'mdl': genome.mdl_score
-        })
-    
-    def _extract_abstract_pattern(self, expression):
-        """提取抽象模式
-        
-        示例：
-        - 2*x+1 -> a*x+b
-        - x+3 -> x+b
-        - 3*x -> a*x
-        """
-        import re
-        
-        # 替换具体数字为抽象符号
-        # 数字*x -> a*x
-        pattern = re.sub(r'\d+\*', 'a*', expression)
-        
-        # *数字 -> *b
-        pattern = re.sub(r'\*\d+', '*b', pattern)
-        
-        # +数字 -> +b
-        pattern = re.sub(r'\+\d+', '+b', pattern)
-        
-        # -数字 -> -b
-        pattern = re.sub(r'\-\d+', '-b', pattern)
-        
-        return pattern
-    
-    def get_best(self):
-        """获取最佳程序"""
-        if not self.archive:
-            return None
-        
-        best_key = max(self.archive.keys(), 
-                      key=lambda k: self.archive[k].fitness)
-        return self.archive[best_key].copy()
-    
-    def get_pattern_instances(self, pattern):
-        """获取特定模式的实例"""
-        if pattern not in self.pattern_archive:
-            return []
-        
-        return [g.copy() for g in self.pattern_archive[pattern]]
-    
-    def get_similar(self, genome, threshold=0.8):
-        """获取相似程序（用于 crossover）"""
-        similar_genomes = []
-        
-        for key, archived_genome in self.archive.items():
-            # 计算结构相似度
-            similarity = self._calculate_similarity(genome, archived_genome)
-            if similarity >= threshold:
-                similar_genomes.append(archived_genome.copy())
-        
-        return similar_genomes
-    
-    def _calculate_similarity(self, genome1, genome2):
-        """计算程序结构相似度"""
-        expr1 = genome1.simplify().to_expression()
-        expr2 = genome2.simplify().to_expression()
-        
-        # 简单字符串相似度
-        common_chars = sum(1 for c in expr1 if c in expr2)
-        max_len = max(len(expr1), len(expr2))
-        
-        return common_chars / max_len if max_len > 0 else 0.0
-    
-    def get_statistics(self):
-        """获取Archive统计"""
-        if not self.archive:
-            return {'size': 0, 'avg_fitness': 0, 'avg_mdl': 0, 'patterns': 0}
-        
-        fitnesses = [g.fitness for g in self.archive.values()]
-        mdls = [g.mdl_score for g in self.archive.values()]
-        
-        return {
-            'size': len(self.archive),
-            'patterns': len(self.pattern_archive),
-            'avg_fitness': np.mean(fitnesses),
-            'avg_mdl': np.mean(mdls),
-            'best_fitness': max(fitnesses),
-            'worst_fitness': min(fitnesses),
-            'pattern_list': list(self.pattern_archive.keys())
-        }
-
-_OP_CODES = {
-    'PUSH': 1, 'ADD': 2, 'SUB': 3, 'MUL': 4, 'DIV': 5,
-    'SHAPE': 6, 'POP': 7, 'STORE': 8, 'LOAD': 9, 'PRINT': 10,
-    'TAPE': 11, 'UNTAPE': 12, 'GRAD': 13, 'HALT': 14, 'JMP': 15,
-    'JMP_IF': 16, 'RELU': 17, 'NEG': 18, 'POW': 19, 'MATMUL': 20
-}
-
-_CODE_OPS = {v: k for k, v in _OP_CODES.items()}
-
-_VAR_PREFIX = 100
-
-
-class Genome:
-    def __init__(self, genes=None, length=None):
-        if genes is not None:
-            self.genes = np.array(genes, dtype=np.float32)
-        elif length is not None:
-            self.genes = self._random_genes(length)
-        else:
-            self.genes = np.array([], dtype=np.float32)
-        self.fitness = None
-
-    @staticmethod
-    def _random_genes(length=None):
-        """生成有意义的种子指令序列，而不是随机填充
-        
-        生成策略：
-        - 长度灵活（默认5-20条有效指令，对应基因数约8-30）
-        - 确保操作码和操作数配对正确
-        - 偏向有用的操作组合（LOAD/PUSH/ADD/MUL/STORE）
-        
-        参数：
-            length: 如果指定，生成大约 length 个基因（向后兼容）
-                   如果不指定，随机生成 5-20 条指令
-        """
-        if length is not None:
-            # 指定长度：尽量接近目标基因数，同时保持指令结构合理
-            genes = []
-            useful_ops = ['LOAD', 'PUSH', 'ADD', 'SUB', 'MUL', 'STORE', 'POP']
-            op_weights = [0.2, 0.25, 0.15, 0.1, 0.15, 0.1, 0.05]
-            
-            target = max(3, length)
-            while len(genes) < target:
-                op = random.choices(useful_ops, weights=op_weights, k=1)[0]
-                genes.append(float(_OP_CODES[op]))
-                
-                if op == 'PUSH':
-                    val = random.uniform(-5, 5)
-                    if random.random() < 0.4:
-                        val = float(random.randint(-5, 5))
-                    genes.append(val)
-                elif op in ('LOAD', 'STORE'):
-                    var_idx = random.randint(0, 3)
-                    genes.append(float(_VAR_PREFIX + var_idx))
-            
-            # 截断到目标长度
-            return np.array(genes[:length], dtype=np.float32)
-        
-        # 不指定长度：灵活长度的指令序列
-        num_ops = random.randint(5, 20)
-        genes = []
-        useful_ops = ['LOAD', 'PUSH', 'ADD', 'SUB', 'MUL', 'STORE', 'POP']
-        op_weights = [0.2, 0.25, 0.15, 0.1, 0.15, 0.1, 0.05]
-        
-        for _ in range(num_ops):
-            op = random.choices(useful_ops, weights=op_weights, k=1)[0]
-            genes.append(float(_OP_CODES[op]))
-            
-            if op == 'PUSH':
-                val = random.uniform(-5, 5)
-                if random.random() < 0.4:
-                    val = float(random.randint(-5, 5))
-                genes.append(val)
-            elif op in ('LOAD', 'STORE'):
-                var_idx = random.randint(0, 3)
-                genes.append(float(_VAR_PREFIX + var_idx))
-        
-        return np.array(genes, dtype=np.float32)
-
-    def decode(self):
-        script = []
-        i = 0
-        while i < len(self.genes):
-            gene = self.genes[i]
-            if gene.is_integer() and int(gene) in _CODE_OPS:
-                op = _CODE_OPS[int(gene)]
-                if op == 'PUSH':
-                    if i + 1 < len(self.genes):
-                        next_gene = self.genes[i + 1]
-                        if not (next_gene.is_integer() and int(next_gene) in _CODE_OPS):
-                            script.append(f"PUSH {next_gene}")
-                            i += 2
-                            continue
-                    script.append("PUSH 0")
-                    i += 1
-                elif op in ('STORE', 'LOAD', 'JMP', 'JMP_IF'):
-                    if i + 1 < len(self.genes):
-                        var_gene = self.genes[i + 1]
-                        if var_gene.is_integer() and int(var_gene) >= _VAR_PREFIX:
-                            var_idx = int(var_gene) - _VAR_PREFIX
-                            var_name = chr(ord('a') + var_idx)
-                            script.append(f"{op} {var_name}")
-                            i += 2
-                            continue
-                    script.append(f"{op} a")
-                    i += 1
-                elif op == 'SHAPE':
-                    if i + 2 < len(self.genes):
-                        dim1 = self.genes[i + 1]
-                        dim2 = self.genes[i + 2]
-                        if dim1.is_integer() and dim2.is_integer():
-                            script.append(f"SHAPE ({int(dim1)},{int(dim2)})")
-                            i += 3
-                            continue
-                    script.append("SHAPE (1,1)")
-                    i += 1
-                else:
-                    script.append(op)
-                    i += 1
-            else:
-                i += 1
-        return '\n'.join(script)
-
-    def execute(self, input_vars=None):
-        vm = NeoGlyphVM()
-        if input_vars:
-            pre_script = []
-            for name, value in input_vars.items():
-                if isinstance(value, (list, np.ndarray)):
-                    pre_script.append(f"PUSH {' '.join(map(str, value))}")
-                else:
-                    pre_script.append(f"PUSH {value}")
-                pre_script.append(f"STORE {name}")
-            full_script = '\n'.join(pre_script) + '\n' + self.decode()
-        else:
-            full_script = self.decode()
-        vm.run(full_script)
-        return vm
-
-    def evaluate(self, target_fn, input_vars=None):
-        try:
-            vm = self.execute(input_vars)
-            result = vm.vars.get('out')
-            if result is None and vm.vars:
-                result = list(vm.vars.values())[-1]
-            if result is None and vm.stack:
-                result = vm.stack[-1]
-            if result is not None:
-                target = target_fn(vm)
-                if isinstance(target, np.ndarray):
-                    target = target.astype(np.float32)
-                else:
-                    target = np.array([target], dtype=np.float32)
-                error = np.mean((result.data - target) ** 2)
-                self.fitness = 1.0 / (1.0 + error)
-            else:
-                self.fitness = 0.0
-        except Exception:
-            self.fitness = 0.0
-        return self.fitness
-
-    @staticmethod
-    def crossover(parent1, parent2, method='single'):
-        if len(parent1.genes) == 0 or len(parent2.genes) == 0:
-            return Genome(parent1.genes.copy())
-
-        if method == 'single':
-            point = random.randint(1, min(len(parent1.genes), len(parent2.genes)) - 1)
-            child_genes = np.concatenate([parent1.genes[:point], parent2.genes[point:]])
-        elif method == 'uniform':
-            child_genes = np.array([
-                parent1.genes[i] if random.random() < 0.5 else parent2.genes[i]
-                for i in range(min(len(parent1.genes), len(parent2.genes)))
-            ])
-        else:
-            child_genes = parent1.genes.copy()
-
-        return Genome(child_genes)
-
-    def mutate(self, mutation_rate=0.1, mutation_std=0.5, max_length=100, protect_important=True, fitness=0.0):
-        elite_factor = max(0, min(1, fitness * 3))
-        
-        i = 0
-        while i < len(self.genes):
-            effective_rate = mutation_rate * (1 - elite_factor * 0.5)
-            
-            if random.random() < effective_rate:
-                gene_type = int(self.genes[i])
-                
-                if gene_type in _CODE_OPS:
-                    op = _CODE_OPS[gene_type]
-                    
-                    if protect_important and op in ['LOAD', 'STORE', 'ADD', 'MUL', 'PUSH']:
-                        elite_protect = random.random() > (0.15 + elite_factor * 0.7)
-                        if elite_protect:
-                            i += 1
-                            continue
-                    
-                    mutation_type = random.random()
-                    if mutation_type < 0.7:
-                        self.genes[i] = random.randint(1, 20)
-                    else:
-                        if elite_factor > 0.5:
-                            new_op = random.choice(['LOAD', 'STORE', 'ADD', 'MUL', 'PUSH', 'POP'])
-                        else:
-                            new_op = random.choice(['LOAD', 'STORE', 'ADD', 'MUL', 'PUSH', 'POP', 'HALT'])
-                        self.genes[i] = _OP_CODES[new_op]
-                    i += 1
-                
-                elif gene_type >= _VAR_PREFIX:
-                    if protect_important:
-                        if random.random() > 0.3:
-                            i += 1
-                            continue
-                    self.genes[i] = random.randint(_VAR_PREFIX, _VAR_PREFIX + 10)
-                    i += 1
-                
-                else:
-                    mutation_type = random.random()
-                    if mutation_type < 0.5:
-                        self.genes[i] += random.gauss(0, mutation_std * 0.15)
-                    elif mutation_type < 0.75:
-                        self.genes[i] += random.gauss(0, mutation_std * 0.5)
-                    elif mutation_type < 0.9:
-                        self.genes[i] += random.gauss(0, mutation_std)
-                    elif mutation_type < 0.97:
-                        self.genes[i] = random.uniform(-3, 3)
-                    else:
-                        val = random.uniform(-10, 10)
-                        while val.is_integer():
-                            val = random.uniform(-10, 10)
-                        self.genes[i] = val
-                    i += 1
-            
-            elif protect_important and i + 1 < len(self.genes):
-                gene_type = int(self.genes[i])
-                if gene_type in _CODE_OPS and _CODE_OPS[gene_type] == 'PUSH':
-                    if random.random() < 0.1:
-                        self.genes[i+1] += random.gauss(0, mutation_std * 0.15)
-            i += 1
-    
-    def _generate_random_gene(self):
-        rand = random.random()
-        if rand < 0.25:
-            return float(random.randint(1, 20))
-        elif rand < 0.40:
-            return float(random.randint(_VAR_PREFIX, _VAR_PREFIX + 10))
-        else:
-            val = random.uniform(-10, 10)
-            while val.is_integer():
-                val = random.uniform(-10, 10)
-            return val
-
-    @staticmethod
-    def selection(population, method='tournament', tournament_size=3):
-        if method == 'tournament':
-            candidates = random.sample(population, tournament_size)
-            return max(candidates, key=lambda g: g.fitness)
-        elif method == 'roulette':
-            total_fitness = sum(g.fitness for g in population)
-            if total_fitness == 0:
-                return random.choice(population)
-            r = random.random() * total_fitness
-            for g in population:
-                r -= g.fitness
-                if r <= 0:
-                    return g
-            return population[-1]
-        else:
-            return random.choice(population)
-
-    def __repr__(self):
-        return f"Genome(length={len(self.genes)}, fitness={self.fitness:.4f})"
-
-    def __len__(self):
-        return len(self.genes)
-
-
-class GeneticOptimizer:
-    def __init__(self, pop_size=50, gene_length=20, mutation_rate=0.1):
-        self.pop_size = pop_size
-        self.gene_length = gene_length
-        self.mutation_rate = mutation_rate
-        self.population = [Genome(length=gene_length) for _ in range(pop_size)]
-        self.generation = 0
-
-    def evolve(self, target_fn, input_vars=None, generations=100, verbose=False):
-        for gen in range(generations):
-            self.generation = gen + 1
-
-            for genome in self.population:
-                genome.evaluate(target_fn, input_vars)
-
-            valid = [g for g in self.population if g.fitness is not None]
-            if valid:
-                best = max(valid, key=lambda g: g.fitness)
-            else:
-                best = self.population[0]
-
-            if verbose and gen % 10 == 0:
-                valid_fitness = [g.fitness for g in self.population if g.fitness is not None]
-                avg_fitness = sum(valid_fitness) / len(valid_fitness) if valid_fitness else 0
-                print(f"Generation {gen}: Best={best.fitness:.4f}, Avg={avg_fitness:.4f}")
-
-            new_population = [best]
-
-            while len(new_population) < self.pop_size:
-                parent1 = Genome.selection(self.population)
-                parent2 = Genome.selection(self.population)
-                child = Genome.crossover(parent1, parent2)
-                child.mutate(self.mutation_rate)
-                new_population.append(child)
-
-            self.population = new_population
-
-        valid = [g for g in self.population if g.fitness is not None]
-        return max(valid, key=lambda g: g.fitness) if valid else self.population[0]
-
-    def get_best(self):
-        return max(self.population, key=lambda g: g.fitness)
+from .genome_linear import ArchiveMemory, Genome, GeneticOptimizer
